@@ -1,0 +1,178 @@
+---
+title: "EDA"
+author: "Zachariah Freitas"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(zoo)
+library(tidyverse)
+library(fpp2) # Plot and Forecast Data
+set.seed(506)
+library(readxl)
+
+df <- read_excel("Sales_Forecasting.xlsx", sheet = "Sales_Data")
+
+# Convert Quarter character to date
+df$date <- as.Date(df$svc_agreement_activation_date)
+```
+
+## EDA
+
+
+```{r}
+
+# Create Time Series Object
+myts <- ts(df$activation_count, 
+           start = c(2021, as.numeric(format(df$date[1], "%j"))),
+           frequency = 364)
+
+
+autoplot(myts) +
+  xlab("Date") + 
+  ylab("Activations") +
+  ggtitle("Forecasts for daily activations") +
+  theme_minimal() +
+  guides(colour=guide_legend(title="Forecast"))
+
+
+```
+
+
+
+```{r models}
+
+
+# Split Data
+train <- window(myts, end = c(2022, 273)) #273 orig 300
+
+# Set Forecast periods
+h <- length(myts) - length(train)
+
+############
+# Naïve Models
+mean_fit <- meanf(train,h=h) # Naïve: Mean
+naive_fit <- naive(train,h=h,level = 95) # Naïve: Last Value
+drift_fit <- rwf(train,h=h,drift=TRUE) # Naïve: Drift Method
+snaive_fit <- snaive(train,h=h) # Naïve: Seasonal Naïve
+
+#############
+# Train Models
+# Trend + Seasonal Model
+ST <- forecast(tslm(train ~ trend + season),h=h)
+# Trend + Fourier Seasonal or Harmonic Regression Model
+# fourier <- forecast(tslm(train ~ trend + fourier(train, K=2)),h=h)
+# Exponential Model
+EXP <- forecast(tslm(train ~ trend + season, lambda = 0),h=h)
+# Spline Model
+# SPLINE <- forecast(tslm(train ~ trend + I(trend^2) + I(trend^3) + season),h=h)
+#TBats
+TBATS <- forecast(tbats(train, biasadj=TRUE), h=h)
+# NNAR - neural network
+NNAR <- forecast(nnetar(train), h=h)#, lambda=0)
+#STL
+# STL <- stlf(train, lambda=0, h=h, biasadj=TRUE)
+# Auto ARIMA
+ARIMA <- forecast(auto.arima(train, lambda=0, biasadj=TRUE),h=h)
+# ETS
+ETS <- forecast(ets(train), h=h)
+
+DHOLT <- holt(train, damped=TRUE, phi = 0.9, h=h)
+
+
+# Dynamic harmonic regression
+k = 1
+fit <- auto.arima(train, xreg = fourier(train, K = k), seasonal = FALSE, lambda = 0)
+model <- forecast(fit, xreg=fourier(train, K=k, h=h))
+
+Combination <- (EXP[["mean"]] + 
+                  ARIMA[["mean"]] +
+                  ST[["mean"]] + 
+                  NNAR[["mean"]] + 
+                  TBATS[["mean"]])/5
+
+
+
+
+# Combination <- (EXP[["mean"]] +  
+#                   TBATS[["mean"]])/2
+
+# Plot Results
+autoplot(window(myts, start=c(2022, 250))) +
+  autolayer(mean_fit, series="Naïve: Mean", PI=FALSE) +
+  # autolayer(drift_fit, series="Naïve: Drift Method", PI=FALSE) +
+  # autolayer(snaive_fit, series="Naïve: Seasonal Naïve", PI=FALSE) +
+  # autolayer(naive_fit, series="Naïve: Last Value", PI=FALSE) +
+  # autolayer(ST, series="Seasonal Trend", PI=FALSE) +
+  autolayer(EXP, series="Exponential", PI=FALSE) +
+  # autolayer(SPLINE, series="Spline", PI=FALSE) +
+  # autolayer(ARIMA, series="ARIMA", PI=FALSE) +
+  autolayer(TBATS, series="TBATS", PI=FALSE) +
+  # autolayer(NNAR, series="NNAR", PI=FALSE) +
+  # autolayer(ETS, series="ETS", PI=FALSE) +
+  autolayer(DHOLT, series="Damped Holt's method", PI=FALSE) +
+  autolayer(model, series="Dynamic harmonic regression", PI=FALSE) +
+  autolayer(Combination, series="Combination") +
+  xlab("Date") + 
+  ylab("Activations") +
+  ggtitle("Forecasts for daily activations") +
+  theme_minimal() +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+## Including Plots
+```{r results}
+window_df <- window(myts, start=2021)
+print(strrep("#", 80))
+print("Naïve: Mean")
+accuracy(mean_fit, window_df)
+print(strrep("#", 80))
+print("Naïve: Last Value")
+accuracy(naive_fit, window_df)
+print(strrep("#", 80))
+print("Naïve: Drift Method")
+accuracy(drift_fit, window_df)
+print(strrep("#", 80))
+print("Naïve: Seasonal Naïve")
+accuracy(snaive_fit, window_df)
+print(strrep("#", 80))
+print("Seasonal Trend")
+accuracy(ST, window_df)
+print(strrep("#", 80))
+print("Exponential")
+accuracy(EXP, window_df)
+print(strrep("#", 80))
+# print("Spline")
+# accuracy(spine_fit, window_df)
+print(strrep("#", 80))
+print("ARIMA")
+accuracy(ARIMA, window_df)
+print(strrep("#", 80))
+print("ETS")
+accuracy(ETS, window_df)
+
+
+```
+
+You can also embed plots, for example:
+
+```{r RMSE}
+c(
+  `Naïve: Mean`= accuracy(mean_fit, myts)["Test set","RMSE"],
+  `Naïve: Last Value`= accuracy(naive_fit, myts)["Test set","RMSE"],
+  `Naïve: Drift Method`= accuracy(drift_fit, myts)["Test set","RMSE"],
+  `Naïve: Seasonal Naïve`= accuracy(snaive_fit, myts)["Test set","RMSE"],
+  DHR = accuracy(model, myts)["Test set","RMSE"],
+  ETS = accuracy(ETS, myts)["Test set","RMSE"],
+  ARIMA = accuracy(ARIMA, myts)["Test set","RMSE"],
+  ST = accuracy(ST, myts)["Test set","RMSE"],
+  NNAR = accuracy(NNAR, myts)["Test set","RMSE"],
+  EXP = accuracy(EXP, myts)["Test set","RMSE"],
+  TBATS = accuracy(TBATS, myts)["Test set","RMSE"],
+  Combination = accuracy(Combination, myts)["Test set","RMSE"])
+
+```
+
+
