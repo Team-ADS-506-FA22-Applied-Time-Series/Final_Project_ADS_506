@@ -4,29 +4,145 @@ library(tidyverse)
 library(fpp2) # Plot and Forecast Data
 set.seed(506)
 library(readxl)
-df <- read_excel("Final Choice plans DMAs.xlsx", 
-                 sheet = "NeuralNet")
+df <- read_excel("Sales_Forecasting.xlsx", 
+                                col_types = c("date", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "text", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric", 
+                                              "numeric", "numeric", "numeric"))
 str(df)
 
 
 
-# Convert Quarter character to date
-df$date <- as.Date(df$svc_agreement_activation_date)
+########################################################################
+# Let's get data statistics
+dim(df)
+summary(df$svc_agreement_activation_date)
+summary( df$activation_count)
+
+########################################################################
+# Let's get the naive model benchmark to beat.
+
+end <- as.Date("2022-09-30")
+start <- end-13
+
+(naive_prediction <- df %>%
+  filter((svc_agreement_activation_date >= start ) & 
+           (svc_agreement_activation_date <= end )) %>% 
+  group_by(weekday) %>% 
+  summarize(avg = mean(activation_count)))
 
 
+sqrt(mean((df %>% filter((svc_agreement_activation_date >= as.Date("2022-10-01") ) & 
+           (svc_agreement_activation_date <= as.Date("2022-10-31") )) %>% 
+  left_join(., naive_prediction, by ='weekday') %>% 
+  select(svc_agreement_activation_date, activation_count, avg, weekday) %>% 
+    mutate(resids = activation_count - avg) %>% pull(resids))^2))
 
 
-max(df$date)
+########################################################################
+# EDA
 
 # Create Time Series Object
 myts <- ts(df$activation_count, 
-           start = c(2021, as.numeric(format(df$date[1], "%j"))),
-           frequency = 364)
+           start = c(2021, 243),
+           frequency = 365)
+
+myts
+
+
+# Plot the Time Series
+autoplot(myts) +
+  labs(title = "Activations Over Time",
+       x = "Daily",
+       y = "Activations") + 
+  theme_minimal()
+
+# 9/30 = 273
+# 10/1 = 274
+
+# Plot the Time Series
+autoplot(window(myts, start = c(2022, 274))) +
+  labs(title = "Activations Over Time",
+       x = "Daily",
+       y = "Activations") + 
+  theme_minimal()
+
+
+# Plot the Time Series
+autoplot(diff(myts)) +
+  labs(title = "Activations Over Time",
+       x = "Daily",
+       y = "Activations") + 
+  theme_minimal()
+
+# Plot the Time Series
+autoplot(diff(diff(myts, 7))) +
+  labs(title = "Activations Over Time",
+       x = "Daily",
+       y = "Activations") + 
+  theme_minimal()
+
+
+# Seasonal Decomposition of Time Series by Loess
+autoplot(mstl(myts, 7))+
+  labs(title = "Activations Over Time",
+       x = "Daily",
+       y = "Activations") + 
+  theme_minimal()
 
 
 
+# take a first order difference to make the data stationary.
+# to determine the ar() part of the ARIMA model p
+acf(myts, 300)
+acf(diff(myts), 300)
+acf(diff(myts, 7), 300)
+acf(diff(diff(myts, 7)), 300)
+
+# to determine the ma()
+pacf(myts, 300)
+pacf(myts, 300)
+pacf(diff(myts))
+pacf(diff(myts, 7))
+pacf(diff(diff(myts, 7)))
+
+
+# our arima model
+my_arima <- arima(myts, order = c(1,1,2), seasonal = list(order = c(1,1,1), period = 7))
+summary(my_arima)
+
+
+auto_model <- auto.arima(myts)
+summary(auto_model)
+
+
+
+# Lag plot
+gglagplot(myts)
+## This plot shows that the relationship is strongly positive for lag of 7
+#, reflecting the strong seasonality in the data. 
+
+
+########################################################################
+
+
+window(myts, end = c(2022, 397)) #273 orig 300
+
+
+length(myts)-30
 # Split Data
-train <- window(myts, end = c(2022, 273)) #273 orig 300
+train <- window(myts, start = as.Date("2022-10-01")) #273 orig 300
 
 # Set Forecast periods
 h <- length(myts) - length(train)
