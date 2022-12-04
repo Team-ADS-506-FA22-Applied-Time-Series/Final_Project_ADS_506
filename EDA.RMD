@@ -2,11 +2,13 @@
 title: "EDA"
 author: "Zachariah Freitas"
 date: "`r Sys.Date()`"
-output: pdf_document
+output: rmarkdown::github_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(
+  fig.path = "README_figs/README-",
+  echo = TRUE)
 library(zoo)
 library(tidyverse)
 library(fpp2) # Plot and Forecast Data
