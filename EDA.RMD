@@ -14,6 +14,12 @@ library(tidyverse)
 library(fpp2) # Plot and Forecast Data
 set.seed(506)
 library(readxl)
+library(feasts)
+library(tsibble)
+# library(tsibbledata)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
 
 df <- read_excel("Sales_Forecasting.xlsx", sheet = "Sales_Data")
 
@@ -29,7 +35,7 @@ df$date <- as.Date(df$svc_agreement_activation_date)
 # Create Time Series Object
 myts <- ts(df$activation_count, 
            start = c(2021, as.numeric(format(df$date[1], "%j"))),
-           frequency = 364)
+           frequency = 365)
 
 
 autoplot(myts) +
@@ -40,15 +46,31 @@ autoplot(myts) +
   guides(colour=guide_legend(title="Forecast"))
 
 
+
+```
+
+
+```{r}
+
+temp <- df %>% 
+  mutate(svc_agreement_activation_date = as.Date(svc_agreement_activation_date)) %>% 
+  as_tsibble(., index = svc_agreement_activation_date)
+
+temp %>% 
+  gg_season(activation_count, period = "week") +
+  theme(legend.position = "right") +
+  labs(y="Activations", x="Day of Week", title="Activation Counts by Day")
 ```
 
 
 
-```{r models}
 
+```{r models}
+library(forecast)
 
 # Split Data
 train <- window(myts, end = c(2022, 273)) #273 orig 300
+valid <- window(myts, start = c(2022, 274)) # October of 2022
 
 # Set Forecast periods
 h <- length(myts) - length(train)
@@ -63,23 +85,47 @@ snaive_fit <- snaive(train,h=h) # Naïve: Seasonal Naïve
 #############
 # Train Models
 # Trend + Seasonal Model
-ST <- forecast(tslm(train ~ trend + season),h=h)
-# Trend + Fourier Seasonal or Harmonic Regression Model
-# fourier <- forecast(tslm(train ~ trend + fourier(train, K=2)),h=h)
+ST <- forecast::forecast(forecast::tslm(train ~ trend + season),h=h)
+
 # Exponential Model
-EXP <- forecast(tslm(train ~ trend + season, lambda = 0),h=h)
-# Spline Model
-# SPLINE <- forecast(tslm(train ~ trend + I(trend^2) + I(trend^3) + season),h=h)
+EXP <- forecast::forecast(forecast::tslm(train ~ trend + season, lambda = 0),h=h)
+
 #TBats
-TBATS <- forecast(tbats(train, biasadj=TRUE), h=h)
+TBATS <- forecast::forecast(tbats(train, biasadj=TRUE), h=h)
+
+
+
+
+# Neural networks
+
+# non-seasonal lags
+# ar(p)
+# p = 3
+
+# seasonal Lags
+# P = 1
+
+# size = (p + P + 1)/2  rounded to nearest integer
+# 3 + 1 + 1 = 5 / 2 = 3
+# This is a heuristic
+
+
+
+# NNAR - Autofit neural network
+NNAR.AF <- forecast::forecast(nnetar(train), h=h)#, lambda=0)
+
+
 # NNAR - neural network
-NNAR <- forecast(nnetar(train), h=h)#, lambda=0)
+NNAR <- forecast::forecast(nnetar(train, p = 14, size = 8), h=h)#, lambda=0)
+
+
+
 #STL
 # STL <- stlf(train, lambda=0, h=h, biasadj=TRUE)
 # Auto ARIMA
-ARIMA <- forecast(auto.arima(train, lambda=0, biasadj=TRUE),h=h)
+ARIMA <- forecast::forecast(auto.arima(train, lambda=0, biasadj=TRUE),h=h)
 # ETS
-ETS <- forecast(ets(train), h=h)
+ETS <- forecast::forecast(ets(train), h=h)
 
 DHOLT <- holt(train, damped=TRUE, phi = 0.9, h=h)
 
@@ -87,7 +133,7 @@ DHOLT <- holt(train, damped=TRUE, phi = 0.9, h=h)
 # Dynamic harmonic regression
 k = 1
 fit <- auto.arima(train, xreg = fourier(train, K = k), seasonal = FALSE, lambda = 0)
-model <- forecast(fit, xreg=fourier(train, K=k, h=h))
+model <- forecast::forecast(fit, xreg=fourier(train, K=k, h=h))
 
 Combination <- (EXP[["mean"]] + 
                   ARIMA[["mean"]] +
@@ -95,11 +141,10 @@ Combination <- (EXP[["mean"]] +
                   NNAR[["mean"]] + 
                   TBATS[["mean"]])/5
 
+```
 
 
-
-# Combination <- (EXP[["mean"]] +  
-#                   TBATS[["mean"]])/2
+```{r Model Plots}
 
 # Plot Results
 autoplot(window(myts, start=c(2022, 250))) +
@@ -112,7 +157,8 @@ autoplot(window(myts, start=c(2022, 250))) +
   # autolayer(SPLINE, series="Spline", PI=FALSE) +
   # autolayer(ARIMA, series="ARIMA", PI=FALSE) +
   autolayer(TBATS, series="TBATS", PI=FALSE) +
-  # autolayer(NNAR, series="NNAR", PI=FALSE) +
+  autolayer(NNAR.AF, series="NNAR Auto", PI=FALSE) +
+  autolayer(NNAR, series="NNAR", PI=FALSE) +
   # autolayer(ETS, series="ETS", PI=FALSE) +
   autolayer(DHOLT, series="Damped Holt's method", PI=FALSE) +
   autolayer(model, series="Dynamic harmonic regression", PI=FALSE) +
@@ -129,31 +175,40 @@ autoplot(window(myts, start=c(2022, 250))) +
 window_df <- window(myts, start=2021)
 print(strrep("#", 80))
 print("Naïve: Mean")
-accuracy(mean_fit, window_df)
+forecast::accuracy(mean_fit, valid)
 print(strrep("#", 80))
 print("Naïve: Last Value")
-accuracy(naive_fit, window_df)
+forecast::accuracy(naive_fit, valid)
 print(strrep("#", 80))
 print("Naïve: Drift Method")
-accuracy(drift_fit, window_df)
+forecast::accuracy(drift_fit, valid)
 print(strrep("#", 80))
 print("Naïve: Seasonal Naïve")
-accuracy(snaive_fit, window_df)
+forecast::accuracy(snaive_fit, valid)
 print(strrep("#", 80))
 print("Seasonal Trend")
-accuracy(ST, window_df)
+forecast::accuracy(ST, valid)
 print(strrep("#", 80))
 print("Exponential")
-accuracy(EXP, window_df)
+forecast::accuracy(EXP, valid)
 print(strrep("#", 80))
 # print("Spline")
-# accuracy(spine_fit, window_df)
+# accuracy(spine_fit, valid)
+print(strrep("#", 80))
+print("Auto Neural Network")
+forecast::accuracy(NNAR.AF, valid)
+
+print(strrep("#", 80))
+print("Neural Network")
+forecast::accuracy(NNAR, valid)
+    
+    
 print(strrep("#", 80))
 print("ARIMA")
-accuracy(ARIMA, window_df)
+forecast::accuracy(ARIMA, valid)
 print(strrep("#", 80))
 print("ETS")
-accuracy(ETS, window_df)
+forecast::accuracy(ETS, valid)
 
 
 ```
@@ -162,18 +217,19 @@ You can also embed plots, for example:
 
 ```{r RMSE}
 c(
-  `Naïve: Mean`= accuracy(mean_fit, myts)["Test set","RMSE"],
-  `Naïve: Last Value`= accuracy(naive_fit, myts)["Test set","RMSE"],
-  `Naïve: Drift Method`= accuracy(drift_fit, myts)["Test set","RMSE"],
-  `Naïve: Seasonal Naïve`= accuracy(snaive_fit, myts)["Test set","RMSE"],
-  DHR = accuracy(model, myts)["Test set","RMSE"],
-  ETS = accuracy(ETS, myts)["Test set","RMSE"],
-  ARIMA = accuracy(ARIMA, myts)["Test set","RMSE"],
-  ST = accuracy(ST, myts)["Test set","RMSE"],
-  NNAR = accuracy(NNAR, myts)["Test set","RMSE"],
-  EXP = accuracy(EXP, myts)["Test set","RMSE"],
-  TBATS = accuracy(TBATS, myts)["Test set","RMSE"],
-  Combination = accuracy(Combination, myts)["Test set","RMSE"])
+  `Naïve: Mean`= forecast::accuracy(mean_fit, valid)["Test set","RMSE"],
+  `Naïve: Last Value`= forecast::accuracy(naive_fit, valid)["Test set","RMSE"],
+  `Naïve: Drift Method`= forecast::accuracy(drift_fit, valid)["Test set","RMSE"],
+  `Naïve: Seasonal Naïve`= forecast::accuracy(snaive_fit, valid)["Test set","RMSE"],
+  DHR = forecast::accuracy(model, valid)["Test set","RMSE"],
+  ETS = forecast::accuracy(ETS, valid)["Test set","RMSE"],
+  ARIMA = forecast::accuracy(ARIMA, valid)["Test set","RMSE"],
+  ST = forecast::accuracy(ST, valid)["Test set","RMSE"],
+  NNAR.AF = forecast::accuracy(NNAR.AF, valid)["Test set","RMSE"],
+  NNAR = forecast::accuracy(NNAR, valid)["Test set","RMSE"],
+  EXP = forecast::accuracy(EXP, valid)["Test set","RMSE"],
+  TBATS = forecast::accuracy(TBATS, valid)["Test set","RMSE"],
+  Combination = forecast::accuracy(Combination, valid)["Test set","RMSE"])
 
 ```
 
