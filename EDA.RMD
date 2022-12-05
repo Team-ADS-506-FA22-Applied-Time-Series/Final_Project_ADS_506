@@ -2,7 +2,10 @@
 title: "EDA"
 author: "Zachariah Freitas"
 date: "`r Sys.Date()`"
-output: rmarkdown::github_document
+output: 
+  pdf_document: default
+  html_document:
+    keep_md: true
 ---
 
 ```{r setup, include=FALSE}
@@ -35,7 +38,7 @@ df$date <- as.Date(df$svc_agreement_activation_date)
 # Create Time Series Object
 myts <- ts(df$activation_count, 
            start = c(2021, as.numeric(format(df$date[1], "%j"))),
-           frequency = 365)
+           frequency = 364)
 
 
 autoplot(myts) +
@@ -69,15 +72,18 @@ temp %>%
 library(forecast)
 
 # Split Data
-train <- window(myts, end = c(2022, 273)) #273 orig 300
-valid <- window(myts, start = c(2022, 274)) # October of 2022
+train <- window(myts, end = c(2022, 274)) #273 orig 300
+valid <- window(myts, start = c(2022, 275)) # October of 2022
 
 # Set Forecast periods
 h <- length(myts) - length(train)
 
 ############
 # Naïve Models
-mean_fit <- meanf(train,h=h) # Naïve: Mean
+
+
+
+current_fit <- meanf(train,h=h) # Naïve: Mean
 naive_fit <- naive(train,h=h,level = 95) # Naïve: Last Value
 drift_fit <- rwf(train,h=h,drift=TRUE) # Naïve: Drift Method
 snaive_fit <- snaive(train,h=h) # Naïve: Seasonal Naïve
@@ -90,78 +96,42 @@ ST <- forecast::forecast(forecast::tslm(train ~ trend + season),h=h)
 # Exponential Model
 EXP <- forecast::forecast(forecast::tslm(train ~ trend + season, lambda = 0),h=h)
 
-#TBats
-TBATS <- forecast::forecast(tbats(train, biasadj=TRUE), h=h)
-
-
-
-
-# Neural networks
-
-# non-seasonal lags
-# ar(p)
-# p = 3
-
-# seasonal Lags
-# P = 1
-
-# size = (p + P + 1)/2  rounded to nearest integer
-# 3 + 1 + 1 = 5 / 2 = 3
-# This is a heuristic
-
-
-
 # NNAR - Autofit neural network
-NNAR.AF <- forecast::forecast(nnetar(train), h=h)#, lambda=0)
+NNAR <- forecast::forecast(nnetar(train), h=h)#, lambda=0)
 
 
-# NNAR - neural network
-NNAR <- forecast::forecast(nnetar(train, p = 14, size = 8), h=h)#, lambda=0)
-
-
-
-#STL
-# STL <- stlf(train, lambda=0, h=h, biasadj=TRUE)
 # Auto ARIMA
 ARIMA <- forecast::forecast(auto.arima(train, lambda=0, biasadj=TRUE),h=h)
-# ETS
-ETS <- forecast::forecast(ets(train), h=h)
-
-DHOLT <- holt(train, damped=TRUE, phi = 0.9, h=h)
 
 
-# Dynamic harmonic regression
-k = 1
-fit <- auto.arima(train, xreg = fourier(train, K = k), seasonal = FALSE, lambda = 0)
-model <- forecast::forecast(fit, xreg=fourier(train, K=k, h=h))
-
+# Ensemble Approach
 Combination <- (EXP[["mean"]] + 
                   ARIMA[["mean"]] +
                   ST[["mean"]] + 
-                  NNAR[["mean"]] + 
-                  TBATS[["mean"]])/5
+                  NNAR[["mean"]])/4
 
 ```
 
 
 ```{r Model Plots}
 
+naive_df <- df %>% 
+  mutate(naive_forecast = (lag7 + lag14)/2) %>% 
+  select(svc_agreement_activation_date, naive_forecast, activation_count)
+
+
+# Create Time Series Object
+mynaivets <- ts(naive_df$naive_forecast, 
+           start = c(2021, as.numeric(format(naive_df$svc_agreement_activation_date[1], "%j"))),
+           frequency = 364)
+
 # Plot Results
 autoplot(window(myts, start=c(2022, 250))) +
-  autolayer(mean_fit, series="Naïve: Mean", PI=FALSE) +
-  # autolayer(drift_fit, series="Naïve: Drift Method", PI=FALSE) +
-  # autolayer(snaive_fit, series="Naïve: Seasonal Naïve", PI=FALSE) +
-  # autolayer(naive_fit, series="Naïve: Last Value", PI=FALSE) +
-  # autolayer(ST, series="Seasonal Trend", PI=FALSE) +
+  autolayer(window(mynaivets, start=c(2022, 275)), series="Baseline Forecast") +
+  autolayer(ST, series="Seasonal Trend", PI=FALSE) +
   autolayer(EXP, series="Exponential", PI=FALSE) +
-  # autolayer(SPLINE, series="Spline", PI=FALSE) +
-  # autolayer(ARIMA, series="ARIMA", PI=FALSE) +
-  autolayer(TBATS, series="TBATS", PI=FALSE) +
-  autolayer(NNAR.AF, series="NNAR Auto", PI=FALSE) +
+  autolayer(ARIMA, series="ARIMA", PI=FALSE) +
   autolayer(NNAR, series="NNAR", PI=FALSE) +
-  # autolayer(ETS, series="ETS", PI=FALSE) +
-  autolayer(DHOLT, series="Damped Holt's method", PI=FALSE) +
-  autolayer(model, series="Dynamic harmonic regression", PI=FALSE) +
   autolayer(Combination, series="Combination") +
   xlab("Date") + 
   ylab("Activations") +
@@ -172,65 +142,78 @@ autoplot(window(myts, start=c(2022, 250))) +
 
 ## Including Plots
 ```{r results}
-window_df <- window(myts, start=2021)
-print(strrep("#", 80))
-print("Naïve: Mean")
-forecast::accuracy(mean_fit, valid)
-print(strrep("#", 80))
-print("Naïve: Last Value")
-forecast::accuracy(naive_fit, valid)
-print(strrep("#", 80))
-print("Naïve: Drift Method")
-forecast::accuracy(drift_fit, valid)
-print(strrep("#", 80))
-print("Naïve: Seasonal Naïve")
-forecast::accuracy(snaive_fit, valid)
+
+# Baseline model
+
+resids <- naive_df %>% 
+  filter(svc_agreement_activation_date >= as.Date('2022-10-01')) %>% 
+  mutate(residuals = naive_forecast - activation_count) %>% 
+  select(residuals)
+
+# RMSE
+print("Baseline Forecast")
+print("RMSE - Test Set")
+round(sqrt(mean(resids$residuals^2)),2)
+print("")
+
 print(strrep("#", 80))
 print("Seasonal Trend")
-forecast::accuracy(ST, valid)
+round(forecast::accuracy(ST, valid),2)
+print("")
+
 print(strrep("#", 80))
 print("Exponential")
-forecast::accuracy(EXP, valid)
-print(strrep("#", 80))
-# print("Spline")
-# accuracy(spine_fit, valid)
-print(strrep("#", 80))
-print("Auto Neural Network")
-forecast::accuracy(NNAR.AF, valid)
+round(forecast::accuracy(EXP, valid),2)
+print("")
 
 print(strrep("#", 80))
 print("Neural Network")
-forecast::accuracy(NNAR, valid)
-    
+round(forecast::accuracy(NNAR, valid),2)
+print("")    
     
 print(strrep("#", 80))
 print("ARIMA")
-forecast::accuracy(ARIMA, valid)
+round(forecast::accuracy(ARIMA, valid),2)
+print("")
+
 print(strrep("#", 80))
-print("ETS")
-forecast::accuracy(ETS, valid)
-
-
+print("Combination")
+round(forecast::accuracy(Combination, valid),2)
+print("")
 ```
 
 You can also embed plots, for example:
 
 ```{r RMSE}
 c(
-  `Naïve: Mean`= forecast::accuracy(mean_fit, valid)["Test set","RMSE"],
-  `Naïve: Last Value`= forecast::accuracy(naive_fit, valid)["Test set","RMSE"],
-  `Naïve: Drift Method`= forecast::accuracy(drift_fit, valid)["Test set","RMSE"],
-  `Naïve: Seasonal Naïve`= forecast::accuracy(snaive_fit, valid)["Test set","RMSE"],
-  DHR = forecast::accuracy(model, valid)["Test set","RMSE"],
-  ETS = forecast::accuracy(ETS, valid)["Test set","RMSE"],
-  ARIMA = forecast::accuracy(ARIMA, valid)["Test set","RMSE"],
+  Baseline = round(sqrt(mean(resids$residuals^2)),2),
   ST = forecast::accuracy(ST, valid)["Test set","RMSE"],
-  NNAR.AF = forecast::accuracy(NNAR.AF, valid)["Test set","RMSE"],
-  NNAR = forecast::accuracy(NNAR, valid)["Test set","RMSE"],
   EXP = forecast::accuracy(EXP, valid)["Test set","RMSE"],
-  TBATS = forecast::accuracy(TBATS, valid)["Test set","RMSE"],
+  NNAR = forecast::accuracy(NNAR, valid)["Test set","RMSE"],
+  ARIMA = forecast::accuracy(ARIMA, valid)["Test set","RMSE"],
   Combination = forecast::accuracy(Combination, valid)["Test set","RMSE"])
 
 ```
 
+Let's try adding the Baseline Forecast to the ensemble to see if we get an improvement in our prediction.
+
+
+```{r}
+
+
+baseline.predict <- df %>% 
+  select(svc_agreement_activation_date, activation_count, lag7, lag14) %>% 
+  mutate(naive_forecast = (lag7 + lag14)/2) %>% 
+  filter(svc_agreement_activation_date >= as.Date('2022-10-01')) 
+
+
+NewCombination <- (EXP[["mean"]] + 
+                  ARIMA[["mean"]] +
+                  ST[["mean"]] + 
+                  NNAR[["mean"]] + 
+                  baseline.predict[["naive_forecast"]])/5
+
+round(forecast::accuracy(NewCombination, valid),2)
+
+```
 
