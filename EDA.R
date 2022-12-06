@@ -306,7 +306,7 @@ week(df_weekly$week)
 
 # Split Data
 train <- window(myts, 
-                start = c(2021, 35), 
+                start = c(202, 35), 
                 end = c(2022, 31)) #38 orig max 43
 h=8
 
@@ -398,3 +398,152 @@ print(strrep("#", 80))
 print("ETS")
 accuracy(ets_fit, window_df)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+myts <- ts(df$activation_count, 
+           start = c(1, 1),
+           frequency = 7)
+
+
+427-31
+
+
+# Split Data
+# train <- window(myts, end = c(57, 4)) #273 orig 300
+train <- window(myts, start = c(45, 5), end = c(57, 4)) #273 orig 300
+valid <- window(myts, start = c(57, 5)) # October of 2022
+
+# Set Forecast periods
+h <- 31 # length(myts) - length(train)
+
+
+
+
+#############
+# Train Models
+# Trend + Seasonal Model
+ST <- forecast::forecast(forecast::tslm(train ~ trend + season),h=h)
+
+# Exponential Model
+EXP <- forecast::forecast(forecast::tslm(train ~ trend + season, lambda = 0),h=h)
+
+# NNAR - Autofit neural network
+NNAR <- forecast::forecast(nnetar(train), h=h)#, lambda=0)
+
+
+# Auto ARIMA
+ARIMA <- forecast::forecast(auto.arima(train, lambda=0, biasadj=TRUE),h=h)
+
+# Ensemble Approach
+Combination <- (EXP[["mean"]] + 
+                  ARIMA[["mean"]] +
+                  ST[["mean"]] + 
+                  NNAR[["mean"]])/4
+
+
+
+Baseline          ST         EXP        NNAR       ARIMA Combination 
+28.16000    53.05689    30.88719    53.24291    74.87482    42.94727 
+
+# RMSE
+print("Baseline Forecast")
+print("RMSE - Test Set")
+round(sqrt(mean(resids$residuals^2)),2)
+print("")
+
+print(strrep("#", 80))
+print("Seasonal Trend")
+round(forecast::accuracy(ST, valid),2)
+print("")
+
+print(strrep("#", 80))
+print("Exponential")
+round(forecast::accuracy(EXP, valid),2)
+print("")
+
+print(strrep("#", 80))
+print("Neural Network")
+round(forecast::accuracy(NNAR, valid),2)
+print("")    
+
+print(strrep("#", 80))
+print("ARIMA")
+round(forecast::accuracy(ARIMA, valid),2)
+print("")
+
+print(strrep("#", 80))
+print("Combination")
+round(forecast::accuracy(Combination, valid),2)
+print("")
+
+
+
+############
+# Baseline Naïve Model
+
+naive_df <- df %>% 
+  mutate(naive_forecast = (lag7 + lag14)/2) %>% 
+  select(svc_agreement_activation_date, naive_forecast, activation_count)
+
+
+# Create Time Series Object
+mynaivets <- ts(naive_df$naive_forecast, 
+                start = c(1,1),
+                frequency = 7)
+
+# Plot Results
+autoplot(window(myts, start=c(55, 1))) +
+  autolayer(window(mynaivets, start=c(57, 5)), series="Baseline Forecast") +
+  autolayer(ST, series="Seasonal Trend", PI=FALSE) +
+  autolayer(EXP, series="Exponential", PI=FALSE) +
+  autolayer(ARIMA, series="ARIMA", PI=FALSE) +
+  autolayer(NNAR, series="NNAR", PI=FALSE) +
+  autolayer(Combination, series="Combination") +
+  xlab("Date") + 
+  ylab("Activations") +
+  ggtitle("Forecasts for daily activations") +
+  theme_minimal() +
+  guides(colour=guide_legend(title="Forecast"))
+
+
+
+
+c(
+  Baseline = round(sqrt(mean(resids$residuals^2)),2),
+  ST = forecast::accuracy(ST, valid)["Test set","RMSE"],
+  EXP = forecast::accuracy(EXP, valid)["Test set","RMSE"],
+  NNAR = forecast::accuracy(NNAR, valid)["Test set","RMSE"],
+  ARIMA = forecast::accuracy(ARIMA, valid)["Test set","RMSE"],
+  Combination = forecast::accuracy(Combination, valid)["Test set","RMSE"])

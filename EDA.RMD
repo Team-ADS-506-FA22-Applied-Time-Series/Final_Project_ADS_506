@@ -3,9 +3,9 @@ title: "EDA"
 author: "Zachariah Freitas"
 date: "`r Sys.Date()`"
 output: 
-  pdf_document: default
   html_document:
     keep_md: true
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -68,25 +68,170 @@ temp %>%
 
 
 
+```{r 56 weeks models}
+library(forecast)
+
+myts <- ts(df$activation_count, 
+           start = c(1, 1),
+           frequency = 7)
+
+# Split Data
+train <- window(myts, end = c(57, 4)) #273 orig 300
+valid <- window(myts, start = c(57, 5)) # October of 2022
+
+# Set Forecast periods
+h <- length(valid)
+
+
+#############
+# Train Models
+# Trend + Seasonal Model
+ST <- forecast::forecast(forecast::tslm(train ~ trend + season),h=h)
+
+# Exponential Model
+EXP <- forecast::forecast(forecast::tslm(train ~ trend + season, lambda = 0),h=h)
+
+# NNAR - Autofit neural network
+NNAR <- forecast::forecast(nnetar(train), h=h)#, lambda=0)
+
+
+# Auto ARIMA
+ARIMA <- forecast::forecast(auto.arima(train, lambda=0, biasadj=TRUE),h=h)
+
+
+# Ensemble Approach
+Combination <- (EXP[["mean"]] + 
+                  ARIMA[["mean"]] +
+                  ST[["mean"]] + 
+                  NNAR[["mean"]])/4
+
+```
+
+
+```{r Model 56 Weeks Plots}
+############
+# Baseline Naïve Model
+
+naive_df <- df %>% 
+  mutate(naive_forecast = (lag7 + lag14)/2) %>% 
+  select(svc_agreement_activation_date, naive_forecast, activation_count)
+
+
+# Create Time Series Object
+mynaivets <- ts(naive_df$naive_forecast, 
+                start = c(1,1),
+                frequency = 7)
+
+# Plot Results
+autoplot(window(myts, start=c(55, 1))) +
+  autolayer(window(mynaivets, start=c(57, 5)), series="Baseline Forecast") +
+  autolayer(ST, series="Seasonal Trend", PI=FALSE) +
+  autolayer(EXP, series="Exponential", PI=FALSE) +
+  autolayer(ARIMA, series="ARIMA", PI=FALSE) +
+  autolayer(NNAR, series="NNAR", PI=FALSE) +
+  autolayer(Combination, series="Combination") +
+  xlab("Date") + 
+  ylab("Activations") +
+  ggtitle("Forecasts for daily activations - 56 Weeks of Training Data") +
+  theme_minimal() +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+## Including Plots
+```{r 56 weeks results}
+
+# Baseline model
+
+resids <- naive_df %>% 
+  filter(svc_agreement_activation_date >= as.Date('2022-10-01')) %>% 
+  mutate(residuals = naive_forecast - activation_count) %>% 
+  select(residuals)
+
+# RMSE
+print("Baseline Forecast")
+print("RMSE - Test Set")
+round(sqrt(mean(resids$residuals^2)),2)
+print("")
+
+print(strrep("#", 80))
+print("Seasonal Trend")
+round(forecast::accuracy(ST, valid),2)
+print("")
+
+print(strrep("#", 80))
+print("Exponential")
+round(forecast::accuracy(EXP, valid),2)
+print("")
+
+print(strrep("#", 80))
+print("Neural Network")
+round(forecast::accuracy(NNAR, valid),2)
+print("")    
+    
+print(strrep("#", 80))
+print("ARIMA")
+round(forecast::accuracy(ARIMA, valid),2)
+print("")
+
+print(strrep("#", 80))
+print("Combination")
+round(forecast::accuracy(Combination, valid),2)
+print("")
+```
+
+You can also embed plots, for example:
+
+```{r 56 weeks RMSE}
+c(
+  Baseline = round(sqrt(mean(resids$residuals^2)),2),
+  ST = forecast::accuracy(ST, valid)["Test set","RMSE"],
+  EXP = forecast::accuracy(EXP, valid)["Test set","RMSE"],
+  NNAR = forecast::accuracy(NNAR, valid)["Test set","RMSE"],
+  ARIMA = forecast::accuracy(ARIMA, valid)["Test set","RMSE"],
+  Combination = forecast::accuracy(Combination, valid)["Test set","RMSE"])
+
+```
+
+Let's try adding the Baseline Forecast to the ensemble to see if we get an improvement in our prediction.
+
+
+```{r 56 weeks combo}
+
+
+baseline.predict <- df %>% 
+  select(svc_agreement_activation_date, activation_count, lag7, lag14) %>% 
+  mutate(naive_forecast = (lag7 + lag14)/2) %>% 
+  filter(svc_agreement_activation_date >= as.Date('2022-10-01')) 
+
+
+NewCombination <- (EXP[["mean"]] + 
+                  ARIMA[["mean"]] +
+                  ST[["mean"]] + 
+                  NNAR[["mean"]] + 
+                  baseline.predict[["naive_forecast"]])/5
+
+round(forecast::accuracy(NewCombination, valid),2)
+
+```
+
+# Try Shorter Lookback Windows
+Seeing that the better performing model uses a smaller lookback period I want to try the same models with a smaller look back period.
+
+
 ```{r models}
 library(forecast)
 
+myts <- ts(df$activation_count, 
+           start = c(1, 1),
+           frequency = 7)
+
 # Split Data
-train <- window(myts, end = c(2022, 274)) #273 orig 300
-valid <- window(myts, start = c(2022, 275)) # October of 2022
+train <- window(myts, start = c(45, 5), end = c(57, 4)) #273 orig 300
+valid <- window(myts, start = c(57, 5)) # October of 2022
 
 # Set Forecast periods
-h <- length(myts) - length(train)
+h <- length(valid)
 
-############
-# Naïve Models
-
-
-
-current_fit <- meanf(train,h=h) # Naïve: Mean
-naive_fit <- naive(train,h=h,level = 95) # Naïve: Last Value
-drift_fit <- rwf(train,h=h,drift=TRUE) # Naïve: Drift Method
-snaive_fit <- snaive(train,h=h) # Naïve: Seasonal Naïve
 
 #############
 # Train Models
@@ -114,6 +259,8 @@ Combination <- (EXP[["mean"]] +
 
 
 ```{r Model Plots}
+############
+# Baseline Naïve Model
 
 naive_df <- df %>% 
   mutate(naive_forecast = (lag7 + lag14)/2) %>% 
@@ -122,12 +269,12 @@ naive_df <- df %>%
 
 # Create Time Series Object
 mynaivets <- ts(naive_df$naive_forecast, 
-           start = c(2021, as.numeric(format(naive_df$svc_agreement_activation_date[1], "%j"))),
-           frequency = 364)
+                start = c(1,1),
+                frequency = 7)
 
 # Plot Results
-autoplot(window(myts, start=c(2022, 250))) +
-  autolayer(window(mynaivets, start=c(2022, 275)), series="Baseline Forecast") +
+autoplot(window(myts, start=c(55, 1))) +
+  autolayer(window(mynaivets, start=c(57, 5)), series="Baseline Forecast") +
   autolayer(ST, series="Seasonal Trend", PI=FALSE) +
   autolayer(EXP, series="Exponential", PI=FALSE) +
   autolayer(ARIMA, series="ARIMA", PI=FALSE) +
@@ -135,7 +282,7 @@ autoplot(window(myts, start=c(2022, 250))) +
   autolayer(Combination, series="Combination") +
   xlab("Date") + 
   ylab("Activations") +
-  ggtitle("Forecasts for daily activations") +
+  ggtitle("Forecasts for daily activations - 12 Weeks of Training Data") +
   theme_minimal() +
   guides(colour=guide_legend(title="Forecast"))
 ```
@@ -216,4 +363,3 @@ NewCombination <- (EXP[["mean"]] +
 round(forecast::accuracy(NewCombination, valid),2)
 
 ```
-
